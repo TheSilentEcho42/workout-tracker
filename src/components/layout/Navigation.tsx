@@ -3,6 +3,7 @@ import { LogOut, History, Calendar, Menu, X, User, Wifi, WifiOff, RefreshCw } fr
 import { useAuth } from '@/contexts/AuthContext'
 import { useOffline } from '@/contexts/OfflineContext'
 import { useState } from 'react'
+import { LinkedLogo } from './Logo'
 
 export const Navigation = () => {
   const { signOut, user, isGuest } = useAuth()
@@ -57,8 +58,8 @@ export const Navigation = () => {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
           {/* Logo */}
-          <Link to={user || isGuest ? "/dashboard" : "/"} className="text-xl font-bold text-gray-900">
-            WorkoutTracker
+          <Link to={user || isGuest ? "/dashboard" : "/"} className="focus:outline-none">
+            <LinkedLogo as="div" />
           </Link>
           
           {/* Desktop Navigation */}

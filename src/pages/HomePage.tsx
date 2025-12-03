@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
+import { GymBrainLogo, LoadingLogo } from '@/components/layout/Logo'
 
 export const HomePage = () => {
   const { user, isGuest, loading } = useAuth()
@@ -15,7 +16,9 @@ export const HomePage = () => {
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-cyan-500"></div>
+        <div className="text-center">
+          <LoadingLogo />
+        </div>
       </div>
     )
   }
@@ -28,11 +31,11 @@ export const HomePage = () => {
     <div className="min-h-screen bg-gray-50">
       <div className="container mx-auto px-4 py-8">
         <div className="max-w-2xl mx-auto text-center">
-          <h1 className="text-2xl font-bold text-gray-900 mb-4">
-            Workout Tracker
-          </h1>
-          <p className="text-gray-600 mb-8">
-            Track your workouts and progress
+          <div className="mb-8">
+            <GymBrainLogo />
+          </div>
+          <p className="text-gray-600 mb-8 text-lg">
+            AI-Powered Workout Tracking
           </p>
           
           <div className="space-y-4">

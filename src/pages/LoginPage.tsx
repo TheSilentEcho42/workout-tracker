@@ -6,6 +6,7 @@ import {
   Eye, 
   EyeOff
 } from 'lucide-react'
+import { LinkedLogo } from '@/components/layout/Logo'
 
 export const LoginPage = () => {
   const [isSignUp, setIsSignUp] = useState(false)
@@ -81,10 +82,10 @@ export const LoginPage = () => {
     <div className="min-h-screen bg-bg-primary">
       <div className="container mx-auto px-4 py-8">
         <div className="flex items-center justify-between mb-8">
-          <Link to="/" className="text-text-primary">
-            WorkoutTracker
+          <Link to="/" className="focus:outline-none">
+            <LinkedLogo as="div" />
           </Link>
-          <Link to="/" className="text-text-secondary">
+          <Link to="/" className="text-text-secondary hover:text-text-primary transition-colors">
             ← Back to Home
           </Link>
         </div>
