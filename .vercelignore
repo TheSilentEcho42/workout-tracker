@@ -1,0 +1,31 @@
+# Test files
+**/__tests__/**
+**/*.test.*
+**/*.spec.*
+e2e/
+src/test/
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Development files
+.env
+.env.local
+.vscode/
+.idea/
+
+# Build artifacts
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
+
+# CI/CD
+.github/
+
+# Dependencies
+node_modules/
+
+

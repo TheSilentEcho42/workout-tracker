@@ -16,7 +16,8 @@ import {
   ArrowRight,
   Zap,
   Star,
-  TrendingUp
+  TrendingUp,
+  Info
 } from 'lucide-react'
 import { getCompletedWorkouts } from '@/lib/history'
 import { exportToJSON, exportToCSV, prepareExportData } from '@/lib/exportUtils'
@@ -100,6 +101,18 @@ export const ProfilePage = () => {
 
   return (
     <div className="min-h-screen bg-bg-primary">
+      {/* Coming Soon Banner */}
+      <div className="bg-accent-primary/10 border-b border-accent-primary/20">
+        <div className="container mx-auto px-4 py-4">
+          <div className="flex items-center justify-center space-x-3 text-accent-primary">
+            <Info className="w-5 h-5 flex-shrink-0" />
+            <p className="text-sm sm:text-base text-center">
+              <span className="font-semibold">Profile Management Coming Soon:</span> Advanced profile customization and AI preference settings are currently in development. Data export is available now!
+            </p>
+          </div>
+        </div>
+      </div>
+
       {/* Hero Section */}
       <section className="relative overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-br from-accent-primary/10 via-transparent to-accent-secondary/10"></div>
@@ -291,7 +304,11 @@ export const ProfilePage = () => {
                   </div>
                 </div>
                 
-                <button className="btn-primary w-full mt-6 flex items-center justify-center">
+                <button 
+                  className="btn-primary w-full mt-6 flex items-center justify-center opacity-60 cursor-not-allowed"
+                  disabled
+                  title="Coming soon - Profile customization features are in development"
+                >
                   Configure AI Settings
                   <ArrowRight className="w-4 h-4 ml-2" />
                 </button>
@@ -532,7 +549,11 @@ export const ProfilePage = () => {
               </p>
               
               <div className="flex flex-col sm:flex-row gap-4 justify-center mb-8">
-                <button className="btn-primary text-lg px-8 py-4 flex items-center justify-center group">
+                <button 
+                  className="btn-primary text-lg px-8 py-4 flex items-center justify-center group opacity-60 cursor-not-allowed"
+                  disabled
+                  title="Coming soon - Profile customization features are in development"
+                >
                   <Settings className="w-5 h-5 mr-2" />
                   Configure AI Settings
                   <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform" />

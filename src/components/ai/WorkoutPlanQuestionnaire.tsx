@@ -11,6 +11,8 @@ interface UserProfile {
   current_fitness: string
   time_per_session: number
   unavailable_days: string[]
+  height?: number // in cm
+  weight?: number // in kg
 }
 
 interface WorkoutPlanQuestionnaireProps {
@@ -19,6 +21,10 @@ interface WorkoutPlanQuestionnaireProps {
 
 export const WorkoutPlanQuestionnaire = ({ onComplete }: WorkoutPlanQuestionnaireProps) => {
   const [currentStep, setCurrentStep] = useState(0)
+  const [heightUnit, setHeightUnit] = useState<'cm' | 'inches'>('cm')
+  const [weightUnit, setWeightUnit] = useState<'kg' | 'lbs'>('kg')
+  const [heightInput, setHeightInput] = useState<string>('')
+  const [weightInput, setWeightInput] = useState<string>('')
   const [profile, setProfile] = useState<UserProfile>({
     experience_level: '',
     goals: [],
@@ -28,7 +34,9 @@ export const WorkoutPlanQuestionnaire = ({ onComplete }: WorkoutPlanQuestionnair
     age: 25,
     current_fitness: '',
     time_per_session: 60,
-    unavailable_days: []
+    unavailable_days: [],
+    height: undefined,
+    weight: undefined
   })
 
   const steps = [
@@ -249,6 +257,179 @@ export const WorkoutPlanQuestionnaire = ({ onComplete }: WorkoutPlanQuestionnair
           </div>
         </div>
       )
+    },
+    {
+      title: 'Body Measurements',
+      description: 'Your height and weight help us create a more personalized plan',
+      icon: Target,
+      content: (
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-sm font-medium text-text-primary">
+                  Height
+                </label>
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (heightUnit !== 'cm' && heightInput) {
+                        // Convert from inches to cm
+                        const inches = parseFloat(heightInput)
+                        if (!isNaN(inches)) {
+                          const cm = inches * 2.54
+                          setHeightInput(cm.toFixed(1))
+                          setProfile(prev => ({ ...prev, height: Math.round(cm * 10) / 10 }))
+                        }
+                      }
+                      setHeightUnit('cm')
+                    }}
+                    className={`px-2 py-1 text-xs border rounded transition-colors ${
+                      heightUnit === 'cm'
+                        ? 'border-accent-primary bg-accent-primary/10 text-accent-primary'
+                        : 'border-border-line hover:border-accent-primary/50'
+                    }`}
+                  >
+                    cm
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (heightUnit !== 'inches' && heightInput) {
+                        // Convert from cm to inches
+                        const cm = parseFloat(heightInput)
+                        if (!isNaN(cm)) {
+                          const inches = cm / 2.54
+                          setHeightInput(inches.toFixed(1))
+                          setProfile(prev => ({ ...prev, height: Math.round(cm * 10) / 10 }))
+                        }
+                      }
+                      setHeightUnit('inches')
+                    }}
+                    className={`px-2 py-1 text-xs border rounded transition-colors ${
+                      heightUnit === 'inches'
+                        ? 'border-accent-primary bg-accent-primary/10 text-accent-primary'
+                        : 'border-border-line hover:border-accent-primary/50'
+                    }`}
+                  >
+                    inches
+                  </button>
+                </div>
+              </div>
+              <input
+                type="number"
+                min={heightUnit === 'cm' ? '100' : '39'}
+                max={heightUnit === 'cm' ? '250' : '98'}
+                step="0.1"
+                className="w-full p-3 border border-border-line rounded-md bg-bg-secondary text-text-primary focus:ring-2 focus:ring-accent-primary/20 focus:border-accent-primary"
+                placeholder={heightUnit === 'cm' ? 'e.g., 175' : 'e.g., 69'}
+                value={heightInput}
+                onChange={(e) => {
+                  const value = e.target.value
+                  setHeightInput(value)
+                  if (value) {
+                    const numValue = parseFloat(value)
+                    if (!isNaN(numValue)) {
+                      // Convert to cm for storage
+                      const heightInCm = heightUnit === 'inches' ? numValue * 2.54 : numValue
+                      setProfile(prev => ({ ...prev, height: Math.round(heightInCm * 10) / 10 }))
+                    } else {
+                      setProfile(prev => ({ ...prev, height: undefined }))
+                    }
+                  } else {
+                    setProfile(prev => ({ ...prev, height: undefined }))
+                  }
+                }}
+              />
+              <p className="text-xs text-text-secondary mt-1">
+                Optional - helps calculate appropriate weights and volumes
+              </p>
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-sm font-medium text-text-primary">
+                  Weight
+                </label>
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (weightUnit !== 'kg' && weightInput) {
+                        // Convert from lbs to kg
+                        const lbs = parseFloat(weightInput)
+                        if (!isNaN(lbs)) {
+                          const kg = lbs / 2.20462
+                          setWeightInput(kg.toFixed(1))
+                          setProfile(prev => ({ ...prev, weight: Math.round(kg * 10) / 10 }))
+                        }
+                      }
+                      setWeightUnit('kg')
+                    }}
+                    className={`px-2 py-1 text-xs border rounded transition-colors ${
+                      weightUnit === 'kg'
+                        ? 'border-accent-primary bg-accent-primary/10 text-accent-primary'
+                        : 'border-border-line hover:border-accent-primary/50'
+                    }`}
+                  >
+                    kg
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (weightUnit !== 'lbs' && weightInput) {
+                        // Convert from kg to lbs
+                        const kg = parseFloat(weightInput)
+                        if (!isNaN(kg)) {
+                          const lbs = kg * 2.20462
+                          setWeightInput(lbs.toFixed(1))
+                          setProfile(prev => ({ ...prev, weight: Math.round(kg * 10) / 10 }))
+                        }
+                      }
+                      setWeightUnit('lbs')
+                    }}
+                    className={`px-2 py-1 text-xs border rounded transition-colors ${
+                      weightUnit === 'lbs'
+                        ? 'border-accent-primary bg-accent-primary/10 text-accent-primary'
+                        : 'border-border-line hover:border-accent-primary/50'
+                    }`}
+                  >
+                    lbs
+                  </button>
+                </div>
+              </div>
+              <input
+                type="number"
+                min={weightUnit === 'kg' ? '30' : '66'}
+                max={weightUnit === 'kg' ? '300' : '661'}
+                step="0.1"
+                className="w-full p-3 border border-border-line rounded-md bg-bg-secondary text-text-primary focus:ring-2 focus:ring-accent-primary/20 focus:border-accent-primary"
+                placeholder={weightUnit === 'kg' ? 'e.g., 75' : 'e.g., 165'}
+                value={weightInput}
+                onChange={(e) => {
+                  const value = e.target.value
+                  setWeightInput(value)
+                  if (value) {
+                    const numValue = parseFloat(value)
+                    if (!isNaN(numValue)) {
+                      // Convert to kg for storage
+                      const weightInKg = weightUnit === 'lbs' ? numValue / 2.20462 : numValue
+                      setProfile(prev => ({ ...prev, weight: Math.round(weightInKg * 10) / 10 }))
+                    } else {
+                      setProfile(prev => ({ ...prev, weight: undefined }))
+                    }
+                  } else {
+                    setProfile(prev => ({ ...prev, weight: undefined }))
+                  }
+                }}
+              />
+              <p className="text-xs text-text-secondary mt-1">
+                Optional - helps tailor exercise recommendations
+              </p>
+            </div>
+          </div>
+        </div>
+      )
     }
   ]
 
@@ -289,6 +470,8 @@ export const WorkoutPlanQuestionnaire = ({ onComplete }: WorkoutPlanQuestionnair
         return true // Injury history is optional
       case 6:
         return profile.time_per_session > 0
+      case 7:
+        return true // Body measurements are optional
       default:
         return false
     }

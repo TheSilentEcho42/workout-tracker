@@ -7,8 +7,7 @@ import {
   generateFollowUpQuestions, 
   generateWorkoutPlans, 
   UserProfile,
-  AIResponse,
-  getCostEstimates 
+  isDayUnavailable
 } from '@/lib/ai'
 
 type PlanningStep = 'questionnaire' | 'ai-questions' | 'plan-options' | 'plan-details'
@@ -38,7 +37,6 @@ export const AIWorkoutPage = () => {
   const [selectedPlan, setSelectedPlan] = useState<WorkoutPlan | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [costEstimates] = useState(getCostEstimates())
 
   const handleQuestionnaireComplete = async (profile: UserProfile) => {
     setUserProfile(profile)
@@ -47,16 +45,11 @@ export const AIWorkoutPage = () => {
     
     try {
       // Use real AI to generate follow-up questions
-      const aiResponse: AIResponse = await generateFollowUpQuestions(profile)
+      const aiResponse = await generateFollowUpQuestions(profile)
       
       if (aiResponse.success) {
         setAiQuestions(aiResponse.data)
         setCurrentStep('ai-questions')
-        
-        // Log cost information
-        if (aiResponse.tokenUsage) {
-          console.log(`AI Questions Generated - Cost: $${aiResponse.tokenUsage.estimatedCost.toFixed(4)}`)
-        }
       } else {
         setError(aiResponse.error || 'Failed to generate AI questions')
         // Fallback to basic questions if AI fails
@@ -82,16 +75,11 @@ export const AIWorkoutPage = () => {
     
     try {
       // Use real AI to generate workout plans
-      const aiResponse: AIResponse = await generateWorkoutPlans(userProfile, answers)
+      const aiResponse = await generateWorkoutPlans(userProfile, answers)
       
       if (aiResponse.success) {
         setPlanOptions(aiResponse.data)
         setCurrentStep('plan-options')
-        
-        // Log cost information
-        if (aiResponse.tokenUsage) {
-          console.log(`Workout Plans Generated - Cost: $${aiResponse.tokenUsage.estimatedCost.toFixed(4)}`)
-        }
       } else {
         setError(aiResponse.error || 'Failed to generate workout plans')
         // Fallback to basic plans if AI fails
@@ -157,23 +145,72 @@ export const AIWorkoutPage = () => {
     const plans: WorkoutPlan[] = []
     const daysPerWeek = profile.days_per_week
     
+    // Define all days of the week
+    const allDays = [
+      { day: 'Monday', value: 'monday' },
+      { day: 'Tuesday', value: 'tuesday' },
+      { day: 'Wednesday', value: 'wednesday' },
+      { day: 'Thursday', value: 'thursday' },
+      { day: 'Friday', value: 'friday' },
+      { day: 'Saturday', value: 'saturday' },
+      { day: 'Sunday', value: 'sunday' }
+    ]
+    
+    // Filter out unavailable days
+    const availableDays = allDays.filter(dayObj => 
+      !isDayUnavailable(dayObj.value, profile.unavailable_days)
+    )
+    
     // Generate basic plans as fallback
-    if (daysPerWeek >= 3) {
+    if (daysPerWeek >= 3 && availableDays.length >= daysPerWeek) {
+      const workoutDays = availableDays.slice(0, daysPerWeek)
+      const workouts = allDays.map(dayObj => {
+        const isUnavailable = isDayUnavailable(dayObj.value, profile.unavailable_days)
+        const isWorkoutDay = workoutDays.some(wd => wd.value === dayObj.value)
+        
+        if (isUnavailable) {
+          return {
+            day: dayObj.day,
+            focus: 'Rest',
+            exercises: [],
+            is_rest: true
+          }
+        } else if (isWorkoutDay) {
+          const workoutIndex = workoutDays.findIndex(wd => wd.value === dayObj.value)
+          const workoutLabels = ['Full Body A', 'Full Body B', 'Full Body C', 'Full Body D', 'Full Body E', 'Full Body F', 'Full Body G']
+          const exerciseSets = [
+            ['Squats', 'Push-ups', 'Rows'],
+            ['Deadlift', 'Pull-ups', 'Dips'],
+            ['Lunges', 'Bench Press', 'Planks'],
+            ['Leg Press', 'Overhead Press', 'Curls'],
+            ['Romanian Deadlift', 'Incline Press', 'Lat Pulldowns'],
+            ['Step-ups', 'Chest Flyes', 'Face Pulls'],
+            ['Bulgarian Split Squats', 'Tricep Extensions', 'Bicep Curls']
+          ]
+          
+          return {
+            day: dayObj.day,
+            focus: workoutLabels[workoutIndex] || 'Full Body',
+            exercises: exerciseSets[workoutIndex] || ['Exercise 1', 'Exercise 2', 'Exercise 3'],
+            is_rest: false
+          }
+        } else {
+          return {
+            day: dayObj.day,
+            focus: 'Rest',
+            exercises: [],
+            is_rest: true
+          }
+        }
+      })
+      
       plans.push({
         id: 'fallback_1',
         name: 'Basic Full Body',
         description: 'Simple full body routine for beginners',
         split_type: 'full_body',
-        days_per_week: 3,
-        workouts: [
-          { day: 'Monday', focus: 'Full Body A', exercises: ['Squats', 'Push-ups', 'Rows'], is_rest: false },
-          { day: 'Tuesday', focus: 'Rest', exercises: [], is_rest: true },
-          { day: 'Wednesday', focus: 'Full Body B', exercises: ['Deadlift', 'Pull-ups', 'Dips'], is_rest: false },
-          { day: 'Thursday', focus: 'Rest', exercises: [], is_rest: true },
-          { day: 'Friday', focus: 'Full Body C', exercises: ['Lunges', 'Bench Press', 'Planks'], is_rest: false },
-          { day: 'Saturday', focus: 'Rest', exercises: [], is_rest: true },
-          { day: 'Sunday', focus: 'Rest', exercises: [], is_rest: true }
-        ]
+        days_per_week: daysPerWeek,
+        workouts
       })
     }
     
@@ -187,9 +224,6 @@ export const AIWorkoutPage = () => {
         <p className="text-text-secondary mb-6">
           Get a personalized, AI-powered workout plan tailored to your goals, experience, and equipment availability.
         </p>
-        <p className="text-sm text-text-secondary mb-8">
-          AI-powered planning costs approximately ${costEstimates.workoutPlanGeneration.estimatedCost} per user
-        </p>
 
         {/* Error Display */}
         {error && (
@@ -202,33 +236,33 @@ export const AIWorkoutPage = () => {
 
         {/* Progress Indicator */}
         <div className="card-primary p-4 mb-6">
-          <div className="flex items-center justify-between overflow-x-auto">
-            <div className={`flex items-center space-x-2 min-w-0 ${currentStep === 'questionnaire' ? 'text-accent-primary' : 'text-text-secondary'}`}>
-              <div className={`w-8 h-8 flex items-center justify-center text-sm border ${currentStep === 'questionnaire' ? 'bg-accent-primary text-bg-primary border-accent-primary' : 'bg-bg-tertiary border-border-line'}`}>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
+            <div className={`flex flex-col sm:flex-row items-center sm:items-center space-y-1 sm:space-y-0 sm:space-x-2 ${currentStep === 'questionnaire' ? 'text-accent-primary' : 'text-text-secondary'}`}>
+              <div className={`w-8 h-8 flex items-center justify-center text-sm border rounded-full flex-shrink-0 ${currentStep === 'questionnaire' ? 'bg-accent-primary text-bg-primary border-accent-primary' : 'bg-bg-tertiary border-border-line'}`}>
                 1
               </div>
-              <span className="text-sm font-medium whitespace-nowrap">Profile & Goals</span>
+              <span className="text-xs sm:text-sm font-medium text-center sm:text-left">Profile & Goals</span>
             </div>
             
-            <div className={`flex items-center space-x-2 min-w-0 ${currentStep === 'ai-questions' ? 'text-accent-primary' : 'text-text-secondary'}`}>
-              <div className={`w-8 h-8 flex items-center justify-center text-sm border ${currentStep === 'ai-questions' ? 'bg-accent-primary text-bg-primary border-accent-primary' : 'bg-bg-tertiary border-border-line'}`}>
+            <div className={`flex flex-col sm:flex-row items-center sm:items-center space-y-1 sm:space-y-0 sm:space-x-2 ${currentStep === 'ai-questions' ? 'text-accent-primary' : 'text-text-secondary'}`}>
+              <div className={`w-8 h-8 flex items-center justify-center text-sm border rounded-full flex-shrink-0 ${currentStep === 'ai-questions' ? 'bg-accent-primary text-bg-primary border-accent-primary' : 'bg-bg-tertiary border-border-line'}`}>
                 2
               </div>
-              <span className="text-sm font-medium whitespace-nowrap">AI Questions</span>
+              <span className="text-xs sm:text-sm font-medium text-center sm:text-left">AI Questions</span>
             </div>
             
-            <div className={`flex items-center space-x-2 min-w-0 ${currentStep === 'plan-options' ? 'text-accent-primary' : 'text-text-secondary'}`}>
-              <div className={`w-8 h-8 flex items-center justify-center text-sm border ${currentStep === 'plan-options' ? 'bg-accent-primary text-bg-primary border-accent-primary' : 'bg-bg-tertiary border-border-line'}`}>
+            <div className={`flex flex-col sm:flex-row items-center sm:items-center space-y-1 sm:space-y-0 sm:space-x-2 ${currentStep === 'plan-options' ? 'text-accent-primary' : 'text-text-secondary'}`}>
+              <div className={`w-8 h-8 flex items-center justify-center text-sm border rounded-full flex-shrink-0 ${currentStep === 'plan-options' ? 'bg-accent-primary text-bg-primary border-accent-primary' : 'bg-bg-tertiary border-border-line'}`}>
                 3
               </div>
-              <span className="text-sm font-medium whitespace-nowrap">Plan Options</span>
+              <span className="text-xs sm:text-sm font-medium text-center sm:text-left">Plan Options</span>
             </div>
             
-            <div className={`flex items-center space-x-2 min-w-0 ${currentStep === 'plan-details' ? 'text-accent-primary' : 'text-text-secondary'}`}>
-              <div className={`w-8 h-8 flex items-center justify-center text-sm border ${currentStep === 'plan-details' ? 'bg-accent-primary text-bg-primary border-accent-primary' : 'bg-bg-tertiary border-border-line'}`}>
+            <div className={`flex flex-col sm:flex-row items-center sm:items-center space-y-1 sm:space-y-0 sm:space-x-2 ${currentStep === 'plan-details' ? 'text-accent-primary' : 'text-text-secondary'}`}>
+              <div className={`w-8 h-8 flex items-center justify-center text-sm border rounded-full flex-shrink-0 ${currentStep === 'plan-details' ? 'bg-accent-primary text-bg-primary border-accent-primary' : 'bg-bg-tertiary border-border-line'}`}>
                 4
               </div>
-              <span className="text-sm font-medium whitespace-nowrap">Your Plan</span>
+              <span className="text-xs sm:text-sm font-medium text-center sm:text-left">Your Plan</span>
             </div>
           </div>
         </div>

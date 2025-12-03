@@ -1,5 +1,8 @@
 import OpenAI from 'openai'
 
+// Constants
+const API_KEY_PLACEHOLDER = 'your_openai_api_key_here'
+
 // Initialize OpenAI client
 const openai = new OpenAI({
   apiKey: import.meta.env.VITE_OPENAI_API_KEY,
@@ -9,15 +12,13 @@ const openai = new OpenAI({
 // Model selection based on task complexity and cost
 const MODELS = {
   SIMPLE: 'gpt-4o-mini',      // $0.15/1M input, $0.60/1M output - for basic tasks
-  STANDARD: 'gpt-4o',         // $2.50/1M input, $10.00/1M output - for complex reasoning
-  BASIC: 'gpt-3.5-turbo'      // $0.50/1M input, $1.50/1M output - for simple text processing
+  STANDARD: 'gpt-4o'          // $2.50/1M input, $10.00/1M output - for complex reasoning
 }
 
 // Cost estimation (per 1M tokens)
 const COST_ESTIMATES = {
   [MODELS.SIMPLE]: { input: 0.15, output: 0.60 },
-  [MODELS.STANDARD]: { input: 2.50, output: 10.00 },
-  [MODELS.BASIC]: { input: 0.50, output: 1.50 }
+  [MODELS.STANDARD]: { input: 2.50, output: 10.00 }
 }
 
 export interface UserProfile {
@@ -30,11 +31,29 @@ export interface UserProfile {
   current_fitness: string
   time_per_session: number
   unavailable_days: string[]
+  height?: number // in cm
+  weight?: number // in kg
 }
 
-export interface AIResponse {
+export interface Workout {
+  day: string
+  focus: string
+  exercises: string[]
+  is_rest: boolean
+}
+
+export interface WorkoutPlan {
+  id: string
+  name: string
+  description: string
+  split_type: string
+  days_per_week: number
+  workouts: Workout[]
+}
+
+export interface AIResponse<T = unknown> {
   success: boolean
-  data: any
+  data: T
   error?: string
   tokenUsage?: {
     model: string
@@ -42,6 +61,48 @@ export interface AIResponse {
     outputTokens: number
     estimatedCost: number
   }
+}
+
+// Helper: Check if API key is valid
+const isApiKeyValid = (): boolean => {
+  const apiKey = import.meta.env.VITE_OPENAI_API_KEY
+  return !!(apiKey && apiKey !== API_KEY_PLACEHOLDER)
+}
+
+// Helper: Format unavailable days list for prompts
+const formatUnavailableDays = (unavailableDays: string[]): string => {
+  return unavailableDays.length > 0 
+    ? unavailableDays.map(day => day.charAt(0).toUpperCase() + day.slice(1)).join(', ')
+    : 'None'
+}
+
+// Helper: Enforce unavailable days in workout plans
+const enforceUnavailableDays = (workouts: Workout[], unavailableDays: string[]): Workout[] => {
+  return workouts.map((workout) => {
+    const dayName = workout.day || ''
+    const isUnavailable = isDayUnavailable(dayName, unavailableDays)
+    
+    if (isUnavailable) {
+      return {
+        ...workout,
+        day: dayName,
+        focus: 'Rest',
+        exercises: [],
+        is_rest: true
+      }
+    }
+    return workout
+  })
+}
+
+// Helper: Log error details consistently
+const logError = (error: unknown, context: string): void => {
+  console.error(`❌ ${context}:`, error)
+  console.error('🔍 Error details:', {
+    name: error instanceof Error ? error.name : 'Unknown',
+    message: error instanceof Error ? error.message : 'Unknown error',
+    stack: error instanceof Error ? error.stack : 'No stack trace'
+  })
 }
 
 // Dispatch cost event for monitoring
@@ -64,14 +125,13 @@ function calculateCost(inputTokens: number, outputTokens: number, model: string)
 }
 
 // Generate contextual follow-up questions based on user profile
-export const generateFollowUpQuestions = async (profile: UserProfile): Promise<AIResponse> => {
+export const generateFollowUpQuestions = async (profile: UserProfile): Promise<AIResponse<string[]>> => {
   try {
     console.log('🔍 Starting AI follow-up questions generation...')
     console.log('📊 User Profile:', profile)
     
     // Check if API key is available
-    const apiKey = import.meta.env.VITE_OPENAI_API_KEY
-    if (!apiKey) {
+    if (!isApiKeyValid()) {
       console.error('❌ No OpenAI API key found in environment variables')
       return {
         success: false,
@@ -80,6 +140,7 @@ export const generateFollowUpQuestions = async (profile: UserProfile): Promise<A
       }
     }
     
+    const apiKey = import.meta.env.VITE_OPENAI_API_KEY!
     console.log('🔑 API Key found, length:', apiKey.length)
     
     const prompt = `You are a fitness expert creating personalized workout plans. Generate exactly 3-5 relevant follow-up questions.
@@ -95,6 +156,8 @@ User Profile:
 - Age: ${profile.age}
 - Fitness level: ${profile.current_fitness}
 - Session time: ${profile.time_per_session} minutes
+- Height: ${profile.height ? `${profile.height} cm` : 'Not provided'}
+- Weight: ${profile.weight ? `${profile.weight} kg` : 'Not provided'}
 
 Generate specific, actionable questions that will help create the best workout plan. Focus on:
 1. Specific limitations or preferences
@@ -183,13 +246,7 @@ RESPONSE FORMAT: Only a JSON array like ["Question 1", "Question 2", "Question 3
       }
     }
   } catch (error) {
-    console.error('❌ AI API error:', error)
-    console.error('🔍 Error details:', {
-      name: error instanceof Error ? error.name : 'Unknown',
-      message: error instanceof Error ? error.message : 'Unknown error',
-      stack: error instanceof Error ? error.stack : 'No stack trace'
-    })
-    
+    logError(error, 'AI API error in generateFollowUpQuestions')
     return {
       success: false,
       data: generateFallbackQuestions(profile),
@@ -198,13 +255,26 @@ RESPONSE FORMAT: Only a JSON array like ["Question 1", "Question 2", "Question 3
   }
 }
 
+// Helper function to normalize day names for comparison
+export const normalizeDayName = (day: string): string => {
+  return day.toLowerCase().trim()
+}
+
+// Helper function to check if a day is unavailable
+export const isDayUnavailable = (day: string, unavailableDays: string[]): boolean => {
+  const normalizedDay = normalizeDayName(day)
+  return unavailableDays.some(unavailable => normalizeDayName(unavailable) === normalizedDay)
+}
+
 // Generate personalized workout plans using AI
 export const generateWorkoutPlans = async (
   profile: UserProfile, 
   aiAnswers: Record<string, string>
-): Promise<AIResponse> => {
+): Promise<AIResponse<WorkoutPlan[]>> => {
   try {
     console.log('🔍 Starting AI workout plan generation...')
+    
+    const unavailableDaysList = formatUnavailableDays(profile.unavailable_days)
     
     const prompt = `You are an expert fitness trainer. Create exactly 2-3 personalized workout plans.
 
@@ -219,6 +289,15 @@ User Profile:
 - Age: ${profile.age}
 - Fitness level: ${profile.current_fitness}
 - Session time: ${profile.time_per_session} minutes
+- Height: ${profile.height ? `${profile.height} cm` : 'Not provided'}
+- Weight: ${profile.weight ? `${profile.weight} kg` : 'Not provided'}
+- Unavailable days: ${unavailableDaysList}
+
+CRITICAL: The user CANNOT work out on these days: ${unavailableDaysList}. 
+- DO NOT schedule any workouts on these days
+- Set "is_rest": true for all unavailable days
+- Only schedule workouts on days that are NOT in the unavailable days list
+- Distribute workouts evenly across available days
 
 AI Follow-up Answers:
 ${Object.entries(aiAnswers).map(([q, a]) => `- ${q}: ${a}`).join('\n')}
@@ -229,6 +308,7 @@ Generate workout plans that are:
 3. Aligned with their specific goals
 4. Optimized for their time constraints
 5. Progressive and sustainable
+6. NEVER schedule workouts on unavailable days (${unavailableDaysList})
 
 RESPONSE FORMAT: Only valid JSON with this exact structure:
 {
@@ -268,7 +348,7 @@ RESPONSE FORMAT: Only valid JSON with this exact structure:
       response_format: { type: "json_object" } // Force JSON response
     })
 
-    let plans: any[] = []
+    let plans: WorkoutPlan[] = []
     const content = response.choices[0].message.content || '{}'
     
     try {
@@ -286,9 +366,15 @@ RESPONSE FORMAT: Only valid JSON with this exact structure:
           plans = extracted.plans || []
         }
       }
+      
+      // Post-process plans to ensure unavailable days are respected
+      plans = plans.map(plan => ({
+        ...plan,
+        workouts: enforceUnavailableDays(plan.workouts, profile.unavailable_days)
+      }))
     } catch (parseError) {
-      console.error('JSON parse error:', parseError)
-      console.error('Raw AI response:', content)
+      logError(parseError, 'JSON parse error in generateWorkoutPlans')
+      console.error('📝 Raw AI response:', content)
       // Return fallback plans
       plans = generateFallbackPlans(profile)
     }
@@ -313,7 +399,7 @@ RESPONSE FORMAT: Only valid JSON with this exact structure:
       }
     }
   } catch (error) {
-    console.error('AI API error:', error)
+    logError(error, 'AI API error in generateWorkoutPlans')
     return {
       success: false,
       data: generateFallbackPlans(profile),
@@ -324,11 +410,13 @@ RESPONSE FORMAT: Only valid JSON with this exact structure:
 
 // Process user feedback and adjust workout plans intelligently
 export const processWorkoutFeedback = async (
-  originalPlan: any,
+  originalPlan: WorkoutPlan,
   userFeedback: string,
   userProfile: UserProfile
-): Promise<AIResponse> => {
+): Promise<AIResponse<WorkoutPlan>> => {
   try {
+    const unavailableDaysList = formatUnavailableDays(userProfile.unavailable_days)
+    
     const prompt = `You are an expert fitness trainer. Modify this workout plan based on user feedback.
 
 IMPORTANT: Respond ONLY with valid JSON. No markdown, no explanations, no additional text.
@@ -343,12 +431,21 @@ User Profile:
 - Goals: ${userProfile.goals.join(', ')}
 - Equipment: ${userProfile.equipment.join(', ')}
 - Injuries: ${userProfile.injury_history.length > 0 ? userProfile.injury_history.join(', ') : 'None'}
+- Height: ${userProfile.height ? `${userProfile.height} cm` : 'Not provided'}
+- Weight: ${userProfile.weight ? `${userProfile.weight} kg` : 'Not provided'}
+- Unavailable days: ${unavailableDaysList}
+
+CRITICAL: The user CANNOT work out on these days: ${unavailableDaysList}. 
+- DO NOT schedule any workouts on these days
+- Set "is_rest": true for all unavailable days
+- Only schedule workouts on days that are NOT in the unavailable days list
 
 Intelligently modify the plan based on the feedback while:
 1. Maintaining safety and appropriateness for their level
 2. Using exercises they can perform with their equipment
 3. Respecting their injury limitations
 4. Keeping the plan balanced and effective
+5. NEVER scheduling workouts on unavailable days (${unavailableDaysList})
 
 RESPONSE FORMAT: Return the modified plan as valid JSON with the same structure as the original.`
 
@@ -383,9 +480,14 @@ RESPONSE FORMAT: Return the modified plan as valid JSON with the same structure 
           modifiedPlan = JSON.parse(planMatch[0])
         }
       }
+      
+      // Post-process plan to ensure unavailable days are respected
+      if (modifiedPlan.workouts && Array.isArray(modifiedPlan.workouts)) {
+        modifiedPlan.workouts = enforceUnavailableDays(modifiedPlan.workouts, userProfile.unavailable_days)
+      }
     } catch (parseError) {
-      console.error('JSON parse error:', parseError)
-      console.error('Raw AI response:', content)
+      logError(parseError, 'JSON parse error in processWorkoutFeedback')
+      console.error('📝 Raw AI response:', content)
       // Return fallback adjustment
       modifiedPlan = generateFallbackAdjustment(originalPlan, userFeedback)
     }
@@ -410,7 +512,7 @@ RESPONSE FORMAT: Return the modified plan as valid JSON with the same structure 
       }
     }
   } catch (error) {
-    console.error('AI API error:', error)
+    logError(error, 'AI API error in processWorkoutFeedback')
     return {
       success: false,
       data: generateFallbackAdjustment(originalPlan, userFeedback),
@@ -424,7 +526,7 @@ export const generateExerciseAlternatives = async (
   exercise: string,
   equipment: string[],
   injuries: string[]
-): Promise<AIResponse> => {
+): Promise<AIResponse<string[]>> => {
   try {
     const prompt = `Generate 3-5 exercise alternatives for "${exercise}" that are:
 
@@ -453,10 +555,26 @@ Return as JSON array of strings with exercise names.`
         }
       ],
       max_tokens: 200,
-      temperature: 0.6
+      temperature: 0.6,
+      response_format: { type: "json_object" }
     })
 
-    const alternatives = JSON.parse(response.choices[0].message.content || '[]')
+    const content = response.choices[0].message.content || '{}'
+    let alternatives: string[] = []
+    
+    try {
+      const parsed = JSON.parse(content)
+      if (Array.isArray(parsed)) {
+        alternatives = parsed
+      } else if (parsed.alternatives && Array.isArray(parsed.alternatives)) {
+        alternatives = parsed.alternatives
+      } else if (parsed.exercises && Array.isArray(parsed.exercises)) {
+        alternatives = parsed.exercises
+      }
+    } catch (parseError) {
+      logError(parseError, 'JSON parse error in generateExerciseAlternatives')
+      console.error('📝 Raw AI response:', content)
+    }
     
     const cost = calculateCost(
       response.usage?.prompt_tokens || 0,
@@ -478,9 +596,10 @@ Return as JSON array of strings with exercise names.`
       }
     }
   } catch (error) {
+    logError(error, 'AI API error in generateExerciseAlternatives')
     return {
       success: false,
-      data: null,
+      data: [],
       error: error instanceof Error ? error.message : 'Unknown error'
     }
   }
@@ -513,34 +632,83 @@ function generateFallbackQuestions(profile: UserProfile): string[] {
   return questions
 }
 
-function generateFallbackPlans(profile: UserProfile): any[] {
+function generateFallbackPlans(profile: UserProfile): WorkoutPlan[] {
   const plans = []
   const daysPerWeek = profile.days_per_week
   
+  // Define all days of the week
+  const allDays = [
+    { day: 'Monday', value: 'monday' },
+    { day: 'Tuesday', value: 'tuesday' },
+    { day: 'Wednesday', value: 'wednesday' },
+    { day: 'Thursday', value: 'thursday' },
+    { day: 'Friday', value: 'friday' },
+    { day: 'Saturday', value: 'saturday' },
+    { day: 'Sunday', value: 'sunday' }
+  ]
+  
+  // Filter out unavailable days
+  const availableDays = allDays.filter(dayObj => 
+    !isDayUnavailable(dayObj.value, profile.unavailable_days)
+  )
+  
   // Generate basic plans as fallback
-  if (daysPerWeek >= 3) {
+  if (daysPerWeek >= 3 && availableDays.length >= daysPerWeek) {
+    const workoutDays = availableDays.slice(0, daysPerWeek)
+    const workouts = allDays.map(dayObj => {
+      const isUnavailable = isDayUnavailable(dayObj.value, profile.unavailable_days)
+      const isWorkoutDay = workoutDays.some(wd => wd.value === dayObj.value)
+      
+      if (isUnavailable) {
+        return {
+          day: dayObj.day,
+          focus: 'Rest',
+          exercises: [],
+          is_rest: true
+        }
+      } else if (isWorkoutDay) {
+        const workoutIndex = workoutDays.findIndex(wd => wd.value === dayObj.value)
+        const workoutLabels = ['Full Body A', 'Full Body B', 'Full Body C', 'Full Body D', 'Full Body E', 'Full Body F', 'Full Body G']
+        const exerciseSets = [
+          ['Squats', 'Push-ups', 'Rows'],
+          ['Deadlift', 'Pull-ups', 'Dips'],
+          ['Lunges', 'Bench Press', 'Planks'],
+          ['Leg Press', 'Overhead Press', 'Curls'],
+          ['Romanian Deadlift', 'Incline Press', 'Lat Pulldowns'],
+          ['Step-ups', 'Chest Flyes', 'Face Pulls'],
+          ['Bulgarian Split Squats', 'Tricep Extensions', 'Bicep Curls']
+        ]
+        
+        return {
+          day: dayObj.day,
+          focus: workoutLabels[workoutIndex] || 'Full Body',
+          exercises: exerciseSets[workoutIndex] || ['Exercise 1', 'Exercise 2', 'Exercise 3'],
+          is_rest: false
+        }
+      } else {
+        return {
+          day: dayObj.day,
+          focus: 'Rest',
+          exercises: [],
+          is_rest: true
+        }
+      }
+    })
+    
     plans.push({
       id: 'fallback_1',
       name: 'Basic Full Body',
       description: 'Simple full body routine for beginners',
       split_type: 'full_body',
-      days_per_week: 3,
-      workouts: [
-        { day: 'Monday', focus: 'Full Body A', exercises: ['Squats', 'Push-ups', 'Rows'], is_rest: false },
-        { day: 'Tuesday', focus: 'Rest', exercises: [], is_rest: true },
-        { day: 'Wednesday', focus: 'Full Body B', exercises: ['Deadlift', 'Pull-ups', 'Dips'], is_rest: false },
-        { day: 'Thursday', focus: 'Rest', exercises: [], is_rest: true },
-        { day: 'Friday', focus: 'Full Body C', exercises: ['Lunges', 'Bench Press', 'Planks'], is_rest: false },
-        { day: 'Saturday', focus: 'Rest', exercises: [], is_rest: true },
-        { day: 'Sunday', focus: 'Rest', exercises: [], is_rest: true }
-      ]
+      days_per_week: daysPerWeek,
+      workouts
     })
   }
   
   return plans
 }
 
-function generateFallbackAdjustment(originalPlan: any, userFeedback: string): any {
+function generateFallbackAdjustment(originalPlan: WorkoutPlan, userFeedback: string): WorkoutPlan {
   const newPlan = JSON.parse(JSON.stringify(originalPlan))
   const feedbackLower = userFeedback.toLowerCase()
   
@@ -609,8 +777,7 @@ export const generateWorkoutChatResponse = async (data: {
     console.log('🤖 Generating workout chat response for:', data.question)
     
     // Check if API key is available
-    const apiKey = import.meta.env.VITE_OPENAI_API_KEY
-    if (!apiKey || apiKey === 'your_openai_api_key_here') {
+    if (!isApiKeyValid()) {
       console.error('❌ No OpenAI API key found or using placeholder')
       return "I'm here to help with your workout! Ask me about form, technique, or any fitness questions. (Note: AI features require OpenAI API key configuration)"
     }
@@ -662,7 +829,7 @@ Keep your response conversational, friendly, and under 150 words. Be specific an
     
     return content
   } catch (error) {
-    console.error('❌ AI Error:', error)
+    logError(error, 'AI error in generateWorkoutChatResponse')
     return "I'm having trouble connecting to the AI service right now. Please try asking your question again in a moment, or check your OpenAI API key configuration."
   }
 }
@@ -677,8 +844,7 @@ export const matchCustomExercise = async (customExerciseName: string): Promise<{
     console.log('🔍 Starting AI exercise matching for:', customExerciseName)
     
     // Check if API key is available
-    const apiKey = import.meta.env.VITE_OPENAI_API_KEY
-    if (!apiKey || apiKey === 'your_openai_api_key_here') {
+    if (!isApiKeyValid()) {
       console.error('❌ No OpenAI API key found or using placeholder')
       return {
         matched: false,
@@ -740,12 +906,25 @@ Only suggest a match if confidence is above 0.7.`
 
     console.log('🤖 AI Response:', content)
     
-    const result = JSON.parse(content)
+    let result: { matched: boolean; suggested_exercise?: string; confidence: number; reason?: string }
+    
+    try {
+      result = JSON.parse(content)
+    } catch (parseError) {
+      logError(parseError, 'JSON parse error in matchCustomExercise')
+      console.error('📝 Raw AI response:', content)
+      return {
+        matched: false,
+        confidence: 0,
+        reason: 'Failed to parse AI response'
+      }
+    }
+    
     dispatchCostEvent('exerciseMatching', calculateCost(response.usage?.prompt_tokens || 0, response.usage?.completion_tokens || 0, MODELS.SIMPLE))
     
     return result
   } catch (error) {
-    console.error('❌ AI Error:', error)
+    logError(error, 'AI error in matchCustomExercise')
     return {
       matched: false,
       confidence: 0,
@@ -776,13 +955,12 @@ export const generateWorkoutSummary = async (data: {
     console.log('📊 Workout data:', data)
     
     // Check if API key is available
-    const apiKey = import.meta.env.VITE_OPENAI_API_KEY
-    if (!apiKey || apiKey === 'your-openai-api-key-here') {
+    if (!isApiKeyValid()) {
       console.error('❌ No OpenAI API key found or using placeholder')
-      console.error('🔑 API Key:', apiKey ? 'Present' : 'Missing')
       throw new Error('OpenAI API key not configured')
     }
     
+    const apiKey = import.meta.env.VITE_OPENAI_API_KEY!
     console.log('🔑 API Key found, length:', apiKey.length)
     
     const exerciseDetails = data.exercises.map(ex => 
@@ -812,7 +990,16 @@ Keep each section concise and encouraging. Focus on form, consistency, and progr
     
     const response = await openai.chat.completions.create({
       model: MODELS.STANDARD,
-      messages: [{ role: 'user', content: prompt }],
+      messages: [
+        {
+          role: 'system',
+          content: 'You are a fitness coach who provides comprehensive workout reviews. You must respond ONLY with valid JSON. Never use markdown or add explanatory text.'
+        },
+        {
+          role: 'user',
+          content: prompt
+        }
+      ],
       temperature: 0.5,
       max_tokens: 600,
       response_format: { type: 'json_object' }
@@ -824,17 +1011,27 @@ Keep each section concise and encouraging. Focus on form, consistency, and progr
     console.log('🤖 AI Response:', content)
     console.log('📊 Token usage:', response.usage)
     
-    const result = JSON.parse(content)
+    let result: { summary: string; strengths: string[]; improvements: string[]; nextSteps: string[] }
+    
+    try {
+      result = JSON.parse(content)
+    } catch (parseError) {
+      logError(parseError, 'JSON parse error in generateWorkoutSummary')
+      console.error('📝 Raw AI response:', content)
+      // Return fallback summary
+      return {
+        summary: "Great job completing your workout! You showed consistency and dedication.",
+        strengths: ["Completed all planned exercises", "Maintained good form"],
+        improvements: ["Consider tracking your progress more consistently"],
+        nextSteps: ["Plan your next workout", "Focus on progressive overload"]
+      }
+    }
+    
     dispatchCostEvent('workoutSummary', calculateCost(response.usage?.prompt_tokens || 0, response.usage?.completion_tokens || 0, MODELS.STANDARD))
     
     return result
   } catch (error) {
-    console.error('❌ AI Error:', error)
-    console.error('❌ Error details:', {
-      message: (error as Error).message,
-      stack: (error as Error).stack,
-      name: (error as Error).name
-    })
+    logError(error, 'AI error in generateWorkoutSummary')
     return {
       summary: "Great job completing your workout! You showed consistency and dedication.",
       strengths: ["Completed all planned exercises", "Maintained good form"],

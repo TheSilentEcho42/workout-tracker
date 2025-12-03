@@ -96,6 +96,8 @@ export interface UserProfile {
   current_fitness: string
   time_per_session: number
   unavailable_days: string[]
+  height?: number // in cm
+  weight?: number // in kg
 }
 
 export interface CustomExercise {

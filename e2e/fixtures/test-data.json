@@ -1,0 +1,47 @@
+{
+  "testUser": {
+    "email": "e2e-test@example.com",
+    "password": "TestPassword123!",
+    "fullName": "E2E Test User"
+  },
+  "workouts": [
+    {
+      "name": "Push Day",
+      "description": "Chest, shoulders, triceps",
+      "exercises": [
+        {
+          "name": "Bench Press",
+          "sets": 3,
+          "reps": 10,
+          "weight": 135
+        },
+        {
+          "name": "Overhead Press",
+          "sets": 3,
+          "reps": 8,
+          "weight": 95
+        }
+      ]
+    },
+    {
+      "name": "Pull Day",
+      "description": "Back, biceps",
+      "exercises": [
+        {
+          "name": "Deadlift",
+          "sets": 3,
+          "reps": 5,
+          "weight": 225
+        },
+        {
+          "name": "Pull-ups",
+          "sets": 3,
+          "reps": 10,
+          "weight": null
+        }
+      ]
+    }
+  ]
+}
+
+

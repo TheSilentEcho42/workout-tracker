@@ -1,12 +1,31 @@
 import { Link, useLocation } from 'react-router-dom'
-import { LogOut, History, Calendar, Menu, X, User } from 'lucide-react'
+import { LogOut, History, Calendar, Menu, X, User, Wifi, WifiOff, RefreshCw } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
+import { useOffline } from '@/contexts/OfflineContext'
 import { useState } from 'react'
 
 export const Navigation = () => {
   const { signOut, user, isGuest } = useAuth()
   const location = useLocation()
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
+  
+  // Safely get offline status (may not be available on all pages)
+  let isOnline = true
+  let isSyncing = false
+  let pendingSyncCount = 0
+  let failedSyncCount = 0
+  let syncNow = async () => {}
+  
+  try {
+    const offline = useOffline()
+    isOnline = offline.isOnline
+    isSyncing = offline.isSyncing
+    pendingSyncCount = offline.pendingSyncCount
+    failedSyncCount = offline.failedSyncCount
+    syncNow = offline.syncNow
+  } catch {
+    // OfflineProvider not available, use defaults
+  }
 
   const handleSignOut = async () => {
     try {
@@ -77,6 +96,37 @@ export const Navigation = () => {
 
           {/* Desktop User Menu */}
           <div className="hidden lg:flex items-center gap-4">
+            {/* Offline Indicator */}
+            {!isOnline ? (
+              <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium bg-yellow-100 text-yellow-800">
+                <WifiOff className="h-3 w-3 mr-1" />
+                Offline
+              </span>
+            ) : isSyncing ? (
+              <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium bg-blue-100 text-blue-800">
+                <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
+                Syncing...
+              </span>
+            ) : pendingSyncCount > 0 ? (
+              <button
+                onClick={syncNow}
+                className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium bg-orange-100 text-orange-800 hover:bg-orange-200 transition-colors"
+                title={`${pendingSyncCount} items pending sync`}
+              >
+                <Wifi className="h-3 w-3 mr-1" />
+                {pendingSyncCount} pending
+              </button>
+            ) : failedSyncCount > 0 ? (
+              <button
+                onClick={syncNow}
+                className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium bg-red-100 text-red-800 hover:bg-red-200 transition-colors"
+                title={`${failedSyncCount} items failed to sync`}
+              >
+                <WifiOff className="h-3 w-3 mr-1" />
+                {failedSyncCount} failed
+              </button>
+            ) : null}
+            
             {isGuest ? (
               <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium bg-cyan-100 text-cyan-800">
                 <User className="h-3 w-3 mr-1" />

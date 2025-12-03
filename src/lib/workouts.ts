@@ -8,6 +8,18 @@ import {
   addGuestCompletedWorkout,
   deleteGuestWorkout
 } from './guestData'
+import {
+  db,
+  saveWorkoutOffline,
+  getWorkoutsOffline,
+  updateWorkoutOffline,
+  deleteWorkoutOffline,
+  saveExerciseOffline,
+  getExercisesOffline,
+  addToSyncQueue,
+  OfflineWorkout,
+  OfflineExercise,
+} from './offline/db'
 
 // Check if user is in guest mode (localStorage-based only, for backward compatibility)
 // Note: New guest accounts are real database accounts, so they won't use this
@@ -15,6 +27,60 @@ const isGuestMode = (): boolean => {
   // Only check for old localStorage guest mode flag
   // New guest accounts are authenticated and use the database
   return localStorage.getItem('guest_mode') === 'true'
+}
+
+/**
+ * Helper function to check if we're online
+ */
+const isOnline = (): boolean => {
+  return typeof navigator !== 'undefined' && navigator.onLine
+}
+
+/**
+ * Helper function to check if an error is a network error
+ */
+const isNetworkError = (error: any): boolean => {
+  if (!error) return false
+  // Check for network-related error messages
+  const networkErrors = ['network', 'fetch', 'connection', 'timeout', 'offline']
+  const errorMessage = error.message?.toLowerCase() || ''
+  return networkErrors.some(keyword => errorMessage.includes(keyword))
+}
+
+/**
+ * Convert OfflineWorkout to ActiveWorkout format
+ */
+const offlineWorkoutToActiveWorkout = (offline: OfflineWorkout, sets: WorkoutSet[] = []): ActiveWorkout => {
+  return {
+    id: offline.workoutId,
+    user_id: offline.userId,
+    name: offline.name,
+    description: offline.description,
+    workout_date: offline.workout_date,
+    status: offline.status === 'in_progress' ? 'in_progress' : 'in_progress', // Force in_progress for ActiveWorkout
+    ai_generated: offline.ai_generated,
+    created_at: offline.createdAt,
+    updated_at: offline.updatedAt,
+    sets,
+  }
+}
+
+/**
+ * Convert OfflineExercise to WorkoutSet format
+ */
+const offlineExerciseToWorkoutSet = (offline: OfflineExercise, workoutId: string): WorkoutSet => {
+  return {
+    id: `offline_${offline.id}`,
+    workout_id: workoutId,
+    exercise_id: offline.exerciseId,
+    exercise_name: offline.exerciseName,
+    weight: offline.weight,
+    reps: offline.reps,
+    rir: offline.rir,
+    duration: offline.duration,
+    notes: offline.notes,
+    order_index: offline.orderIndex,
+  }
 }
 
 export interface WorkoutSet {
@@ -82,62 +148,73 @@ export const createWorkout = async (data: CreateWorkoutData): Promise<ActiveWork
     return workout
   }
   
-  try {
-    // Check if database is configured
-    if (!isDatabaseConfigured) {
-      console.warn('⚠️ Database not configured - using mock workout')
+  if (!user) throw new Error('User not authenticated')
+
+  // Try online first if available
+  if (isOnline() && isDatabaseConfigured) {
+    try {
+      const { data: workout, error } = await supabase
+        .from('workouts')
+        .insert({
+          user_id: user.id,
+          name: data.name,
+          description: data.description,
+          workout_date: data.workout_date,
+          status: 'in_progress',
+          ai_generated: false
+        })
+        .select()
+        .single()
+
+      if (error) throw error
+
       return {
-        id: `mock_${Date.now()}`,
-        user_id: 'mock_user',
-        name: data.name,
-        description: data.description,
-        workout_date: data.workout_date,
-        status: 'in_progress',
-        ai_generated: false,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
+        ...workout,
         sets: []
       }
+    } catch (error) {
+      // If network error or offline, fall through to offline storage
+      if (!isNetworkError(error) && isOnline()) {
+        // Non-network error while online - rethrow
+        throw error
+      }
+      // Network error or offline - continue to offline storage
+      console.log('💾 Saving workout offline due to network issue:', error)
     }
+  }
 
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) throw new Error('User not authenticated')
+  // Offline mode: Save to IndexedDB and queue for sync
+  const workoutId = `local_${Date.now()}`
+  const workout: ActiveWorkout = {
+    id: workoutId,
+    user_id: user.id,
+    name: data.name,
+    description: data.description,
+    workout_date: data.workout_date,
+    status: 'in_progress',
+    ai_generated: false,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    sets: []
+  }
 
-    const { data: workout, error } = await supabase
-      .from('workouts')
-      .insert({
-        user_id: user.id,
-        name: data.name,
-        description: data.description,
-        workout_date: data.workout_date,
-        status: 'in_progress',
-        ai_generated: false
-      })
-      .select()
-      .single()
-
-    if (error) throw error
-
-    return {
-      ...workout,
-      sets: []
-    }
-  } catch (error) {
-    // Fallback to mock workout if Supabase fails
-    console.warn('Supabase error, using mock workout:', error)
-    return {
-      id: `mock_${Date.now()}`,
-      user_id: 'mock_user',
+  try {
+    await saveWorkoutOffline(workout, user.id)
+    await addToSyncQueue('create', 'workout', workoutId, {
+      user_id: user.id,
       name: data.name,
       description: data.description,
       workout_date: data.workout_date,
       status: 'in_progress',
       ai_generated: false,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      sets: []
-    }
+    })
+    console.log('✅ Workout saved offline, queued for sync')
+  } catch (error) {
+    console.error('Failed to save workout offline:', error)
+    // Still return the workout object so UI doesn't break
   }
+
+  return workout
 }
 
 // Add an exercise to a workout
@@ -175,21 +252,74 @@ export const addExerciseToWorkout = async (data: AddExerciseData): Promise<Worko
     return newSets
   }
   
-  try {
-    // Ensure weight is properly formatted as a number if present
-    const formattedWeight = weight !== undefined && weight !== null 
-      ? (typeof weight === 'number' ? weight : parseFloat(String(weight)))
-      : undefined
-    
-    if (formattedWeight !== undefined && isNaN(formattedWeight)) {
-      console.error('Invalid weight value:', weight)
-      throw new Error('Invalid weight value')
+  if (!user) throw new Error('User not authenticated')
+
+  // Ensure weight is properly formatted as a number if present
+  const formattedWeight = weight !== undefined && weight !== null 
+    ? (typeof weight === 'number' ? weight : parseFloat(String(weight)))
+    : undefined
+  
+  if (formattedWeight !== undefined && isNaN(formattedWeight)) {
+    console.error('Invalid weight value:', weight)
+    throw new Error('Invalid weight value')
+  }
+
+  // Check if workout is stored offline (starts with 'local_')
+  const isOfflineWorkout = workout_id.startsWith('local_')
+  
+  // Try online first if available and not an offline workout
+  if (isOnline() && isDatabaseConfigured && !isOfflineWorkout) {
+    try {
+      // Create multiple sets for the exercise
+      const newSets: Omit<WorkoutSet, 'id'>[] = Array.from({ length: sets }, (_, index) => ({
+        workout_id,
+        exercise_id: exercise.id,
+        exercise_name: exercise.name,
+        weight: formattedWeight,
+        reps,
+        rir,
+        duration,
+        notes: '',
+        order_index: index
+      }))
+
+      const { data: savedSets, error } = await supabase
+        .from('workout_sets')
+        .insert(newSets)
+        .select()
+
+      if (error) throw error
+
+      console.log('✅ Sets saved successfully:', savedSets)
+      return savedSets
+    } catch (error) {
+      // If network error, fall through to offline storage
+      if (!isNetworkError(error) && isOnline()) {
+        throw error
+      }
+      console.log('💾 Saving sets offline due to network issue:', error)
     }
-    
-    console.log('Adding exercise to workout:', { workout_id, exercise: exercise.name, sets, reps, weight: formattedWeight, rir, duration })
-    
-    // Create multiple sets for the exercise
-    const newSets: Omit<WorkoutSet, 'id'>[] = Array.from({ length: sets }, (_, index) => ({
+  }
+
+  // Offline mode: Save to IndexedDB
+  // First, find the offline workout by workoutId
+  const offlineWorkouts = await db.workouts
+    .where('workoutId')
+    .equals(workout_id)
+    .toArray()
+  
+  if (offlineWorkouts.length === 0) {
+    throw new Error('Workout not found in offline storage')
+  }
+
+  const offlineWorkout = offlineWorkouts[0]
+  const existingExercises = await getExercisesOffline(offlineWorkout.id!)
+  const existingSetsCount = existingExercises.length
+
+  const newSets: WorkoutSet[] = []
+  
+  for (let index = 0; index < sets; index++) {
+    const setData: Omit<WorkoutSet, 'id'> = {
       workout_id,
       exercise_id: exercise.id,
       exercise_name: exercise.name,
@@ -198,42 +328,38 @@ export const addExerciseToWorkout = async (data: AddExerciseData): Promise<Worko
       rir,
       duration,
       notes: '',
-      order_index: index
-    }))
-
-    console.log('Created sets to insert:', newSets)
-    console.log('Weight values in sets:', newSets.map(s => ({ weight: s.weight, type: typeof s.weight })))
-
-    // Save sets to the database
-    const { data: savedSets, error } = await supabase
-      .from('workout_sets')
-      .insert(newSets)
-      .select()
-
-    if (error) {
-      console.error('Error saving sets to database:', error)
-      console.error('Error details:', JSON.stringify(error, null, 2))
-      throw error
+      order_index: existingSetsCount + index
     }
 
-    console.log('✅ Sets saved successfully:', savedSets)
-    return savedSets
-  } catch (error) {
-    console.error('Supabase error, using mock sets:', error)
-    // Fallback to mock sets if Supabase fails
-    return Array.from({ length: sets }, (_, index) => ({
-      id: `mock_set_${Date.now()}_${index}`,
-      workout_id,
-      exercise_id: exercise.id,
-      exercise_name: exercise.name,
-      weight,
-      reps,
-      rir,
-      duration,
-      notes: '',
-      order_index: index
-    }))
+    try {
+      // Save to IndexedDB and get the Dexie ID
+      const offlineId = await saveExerciseOffline(setData as WorkoutSet, offlineWorkout.id!)
+      
+      // Create WorkoutSet with offline ID format
+      const set: WorkoutSet = {
+      ...setData,
+        id: `offline_${offlineId}`,
+      }
+      
+      await addToSyncQueue('create', 'workout_set', set.id, {
+        workout_id,
+        exercise_id: exercise.id,
+        exercise_name: exercise.name,
+        weight: formattedWeight,
+        reps,
+        rir,
+        duration,
+        notes: '',
+        order_index: existingSetsCount + index,
+      })
+      newSets.push(set)
+    } catch (error) {
+      console.error('Failed to save set offline:', error)
+    }
   }
+
+  console.log('✅ Sets saved offline, queued for sync')
+  return newSets
 }
 
 // Update a set (weight, reps, rir, notes)
@@ -259,38 +385,74 @@ export const updateSet = async (setId: string, updates: Partial<WorkoutSet>): Pr
     throw new Error('Set not found')
   }
   
-  try {
-    // Ensure weight is properly formatted as a number if present
-    const formattedUpdates = { ...updates }
-    if ('weight' in formattedUpdates && formattedUpdates.weight !== undefined && formattedUpdates.weight !== null) {
-      formattedUpdates.weight = typeof formattedUpdates.weight === 'number' 
-        ? formattedUpdates.weight 
-        : parseFloat(String(formattedUpdates.weight))
-      
-      // Validate the weight value
-      if (isNaN(formattedUpdates.weight as number)) {
-        console.error('Invalid weight value:', updates.weight)
-        throw new Error('Invalid weight value')
-      }
-    }
-    
-    console.log('Updating set:', setId, 'with updates:', formattedUpdates)
-    console.log('Weight value type:', typeof formattedUpdates.weight, 'Value:', formattedUpdates.weight)
-    
-    const { error } = await supabase
-      .from('workout_sets')
-      .update(formattedUpdates)
-      .eq('id', setId)
+  if (!user) throw new Error('User not authenticated')
 
-    if (error) {
-      console.error('Error updating set:', error)
-      console.error('Error details:', JSON.stringify(error, null, 2))
-      throw error
-    }
+  // Ensure weight is properly formatted as a number if present
+  const formattedUpdates = { ...updates }
+  if ('weight' in formattedUpdates && formattedUpdates.weight !== undefined && formattedUpdates.weight !== null) {
+    formattedUpdates.weight = typeof formattedUpdates.weight === 'number' 
+      ? formattedUpdates.weight 
+      : parseFloat(String(formattedUpdates.weight))
     
-    console.log('✅ Set updated successfully:', setId)
+    // Validate the weight value
+    if (isNaN(formattedUpdates.weight as number)) {
+      console.error('Invalid weight value:', updates.weight)
+      throw new Error('Invalid weight value')
+    }
+  }
+
+  // Check if set is stored offline (starts with 'offline_set_')
+  const isOfflineSet = setId.startsWith('offline_set_')
+  
+  // Try online first if available and not an offline set
+  if (isOnline() && isDatabaseConfigured && !isOfflineSet) {
+    try {
+      const { error } = await supabase
+        .from('workout_sets')
+        .update(formattedUpdates)
+        .eq('id', setId)
+
+      if (error) throw error
+      
+      console.log('✅ Set updated successfully:', setId)
+      return
+    } catch (error) {
+      // If network error, fall through to offline storage
+      if (!isNetworkError(error) && isOnline()) {
+        throw error
+      }
+      console.log('💾 Updating set offline due to network issue:', error)
+    }
+  }
+
+  // Offline mode: Update in IndexedDB
+  // Extract numeric ID from offline_ prefix
+  const offlineId = parseInt(setId.replace('offline_', ''))
+  
+  if (isNaN(offlineId)) {
+    throw new Error('Invalid offline set ID')
+  }
+
+  try {
+    const exercise = await db.exercises.get(offlineId)
+    if (!exercise) {
+      throw new Error('Set not found in offline storage')
+    }
+
+    // Update exercise in IndexedDB
+    await db.exercises.update(offlineId, {
+      weight: formattedUpdates.weight !== undefined ? formattedUpdates.weight : exercise.weight,
+      reps: formattedUpdates.reps !== undefined ? formattedUpdates.reps : exercise.reps,
+      rir: formattedUpdates.rir !== undefined ? formattedUpdates.rir : exercise.rir,
+      duration: formattedUpdates.duration !== undefined ? formattedUpdates.duration : exercise.duration,
+      notes: formattedUpdates.notes !== undefined ? formattedUpdates.notes : exercise.notes,
+    })
+
+    // Queue for sync
+    await addToSyncQueue('update', 'workout_set', setId, formattedUpdates)
+    console.log('✅ Set updated offline, queued for sync')
   } catch (error) {
-    console.error('Failed to update set:', error)
+    console.error('Failed to update set offline:', error)
     throw error
   }
 }
@@ -338,41 +500,85 @@ export const addSet = async (data: {
     return newSet
   }
   
+  if (!user) throw new Error('User not authenticated')
+
+  // Check if workout is stored offline
+  const isOfflineWorkout = workout_id.startsWith('local_')
+  
+  // Try online first if available and not an offline workout
+  if (isOnline() && isDatabaseConfigured && !isOfflineWorkout) {
+    try {
+      const newSet: Omit<WorkoutSet, 'id'> = {
+        workout_id,
+        exercise_id,
+        exercise_name,
+        weight,
+        reps,
+        rir,
+        duration,
+        notes: '',
+        order_index: 0
+      }
+
+      const { data: savedSet, error } = await supabase
+        .from('workout_sets')
+        .insert(newSet)
+        .select()
+        .single()
+
+      if (error) throw error
+      return savedSet
+    } catch (error) {
+      // If network error, fall through to offline storage
+      if (!isNetworkError(error) && isOnline()) {
+        throw error
+      }
+      console.log('💾 Adding set offline due to network issue:', error)
+    }
+  }
+
+  // Offline mode: Save to IndexedDB
+  const offlineWorkouts = await db.workouts
+    .where('workoutId')
+    .equals(workout_id)
+    .toArray()
+  
+  if (offlineWorkouts.length === 0) {
+    throw new Error('Workout not found in offline storage')
+  }
+
+  const offlineWorkout = offlineWorkouts[0]
+  const existingExercises = await getExercisesOffline(offlineWorkout.id!)
+  const existingSetsCount = existingExercises.length
+
+  const setData: Omit<WorkoutSet, 'id'> = {
+    workout_id,
+    exercise_id,
+    exercise_name,
+    weight,
+    reps,
+    rir,
+    duration,
+    notes: '',
+    order_index: existingSetsCount
+  }
+
   try {
-    const newSet: Omit<WorkoutSet, 'id'> = {
-      workout_id,
-      exercise_id,
-      exercise_name,
-      weight,
-      reps,
-      rir,
-      duration,
-      notes: '',
-      order_index: 0 // Will be updated if needed
+    // Save to IndexedDB and get the Dexie ID
+    const offlineId = await saveExerciseOffline(setData as WorkoutSet, offlineWorkout.id!)
+    
+    // Create WorkoutSet with offline ID format
+    const newSet: WorkoutSet = {
+      ...setData,
+      id: `offline_${offlineId}`,
     }
-
-    const { data: savedSet, error } = await supabase
-      .from('workout_sets')
-      .insert(newSet)
-      .select()
-      .single()
-
-    if (error) throw error
-    return savedSet
+    
+    await addToSyncQueue('create', 'workout_set', newSet.id, setData)
+    console.log('✅ Set added offline, queued for sync')
+    return newSet
   } catch (error) {
-    console.error('Supabase error, using mock set:', error)
-    return {
-      id: `mock_set_${Date.now()}`,
-      workout_id,
-      exercise_id,
-      exercise_name,
-      weight,
-      reps,
-      rir,
-      duration,
-      notes: '',
-      order_index: 0
-    }
+    console.error('Failed to add set offline:', error)
+    throw error
   }
 }
 
@@ -399,12 +605,53 @@ export const deleteSet = async (setId: string): Promise<void> => {
     throw new Error('Set not found')
   }
   
-  const { error } = await supabase
-    .from('workout_sets')
-    .delete()
-    .eq('id', setId)
+  if (!user) throw new Error('User not authenticated')
 
-  if (error) throw error
+  // Check if set is stored offline
+  const isOfflineSet = setId.startsWith('offline_set_')
+  
+  // Try online first if available and not an offline set
+  if (isOnline() && isDatabaseConfigured && !isOfflineSet) {
+    try {
+      const { error } = await supabase
+        .from('workout_sets')
+        .delete()
+        .eq('id', setId)
+
+      if (error) throw error
+      return
+    } catch (error) {
+      // If network error, fall through to offline storage
+      if (!isNetworkError(error) && isOnline()) {
+        throw error
+      }
+      console.log('💾 Deleting set offline due to network issue:', error)
+    }
+  }
+
+  // Offline mode: Delete from IndexedDB
+  // Extract numeric ID from offline_ prefix
+  const offlineId = parseInt(setId.replace('offline_', ''))
+  
+  if (isNaN(offlineId)) {
+    throw new Error('Invalid offline set ID')
+  }
+
+  try {
+    const exercise = await db.exercises.get(offlineId)
+    if (!exercise) {
+      throw new Error('Set not found in offline storage')
+    }
+
+    await db.exercises.delete(offlineId)
+    
+    // Queue for sync
+    await addToSyncQueue('delete', 'workout_set', setId, {})
+    console.log('✅ Set deleted offline, queued for sync')
+  } catch (error) {
+    console.error('Failed to delete set offline:', error)
+    throw error
+  }
 }
 
 // Complete a workout
@@ -430,25 +677,61 @@ export const completeWorkout = async (workoutId: string): Promise<void> => {
     return
   }
   
-  try {
-    console.log('Completing workout:', workoutId)
-    
-    const { error } = await supabase
-      .from('workouts')
-      .update({ 
-        status: 'completed',
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', workoutId)
+  if (!user) throw new Error('User not authenticated')
 
-    if (error) {
-      console.error('Error completing workout:', error)
-      throw error
+  // Check if workout is stored offline
+  const isOfflineWorkout = workoutId.startsWith('local_')
+  
+  // Try online first if available and not an offline workout
+  if (isOnline() && isDatabaseConfigured && !isOfflineWorkout) {
+    try {
+      const { error } = await supabase
+        .from('workouts')
+        .update({ 
+          status: 'completed',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', workoutId)
+
+      if (error) throw error
+      
+      console.log('✅ Workout completed successfully:', workoutId)
+      return
+    } catch (error) {
+      // If network error, fall through to offline storage
+      if (!isNetworkError(error) && isOnline()) {
+        throw error
+      }
+      console.log('💾 Completing workout offline due to network issue:', error)
     }
+  }
+
+  // Offline mode: Update in IndexedDB
+  const offlineWorkouts = await db.workouts
+    .where('workoutId')
+    .equals(workoutId)
+    .toArray()
+  
+  if (offlineWorkouts.length === 0) {
+    throw new Error('Workout not found in offline storage')
+  }
+
+  const offlineWorkout = offlineWorkouts[0]
+  
+  try {
+    await updateWorkoutOffline(offlineWorkout.id!, {
+      status: 'completed',
+      syncStatus: 'pending',
+    })
     
-    console.log('✅ Workout completed successfully:', workoutId)
+    // Queue for sync
+    await addToSyncQueue('update', 'workout', workoutId, {
+      status: 'completed',
+      updated_at: new Date().toISOString(),
+    })
+    console.log('✅ Workout completed offline, queued for sync')
   } catch (error) {
-    console.error('Failed to complete workout:', error)
+    console.error('Failed to complete workout offline:', error)
     throw error
   }
 }
@@ -488,30 +771,76 @@ export const completeWorkoutWithSummary = async (
     return
   }
   
-  try {
-    console.log('Completing workout with summary:', workoutId)
-    
-    const { error } = await supabase
-      .from('workouts')
-      .update({ 
-        status: 'completed',
-        summary,
-        strengths,
-        improvements,
-        next_steps: nextSteps,
-        duration_minutes: durationMinutes,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', workoutId)
+  if (!user) throw new Error('User not authenticated')
 
-    if (error) {
-      console.error('Error completing workout with summary:', error)
-      throw error
+  // Check if workout is stored offline
+  const isOfflineWorkout = workoutId.startsWith('local_')
+  
+  // Try online first if available and not an offline workout
+  if (isOnline() && isDatabaseConfigured && !isOfflineWorkout) {
+    try {
+      const { error } = await supabase
+        .from('workouts')
+        .update({ 
+          status: 'completed',
+          summary,
+          strengths,
+          improvements,
+          next_steps: nextSteps,
+          duration_minutes: durationMinutes,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', workoutId)
+
+      if (error) throw error
+      
+      console.log('✅ Workout completed with summary successfully:', workoutId)
+      return
+    } catch (error) {
+      // If network error, fall through to offline storage
+      if (!isNetworkError(error) && isOnline()) {
+        throw error
+      }
+      console.log('💾 Completing workout offline due to network issue:', error)
     }
+  }
+
+  // Offline mode: Update in IndexedDB
+  const offlineWorkouts = await db.workouts
+    .where('workoutId')
+    .equals(workoutId)
+    .toArray()
+  
+  if (offlineWorkouts.length === 0) {
+    throw new Error('Workout not found in offline storage')
+  }
+
+  const offlineWorkout = offlineWorkouts[0]
+  
+  try {
+    await updateWorkoutOffline(offlineWorkout.id!, {
+      status: 'completed',
+      summary,
+      strengths,
+      improvements,
+      next_steps: nextSteps,
+      duration_minutes: durationMinutes,
+      syncStatus: 'pending',
+    })
     
-    console.log('✅ Workout completed with summary successfully:', workoutId)
+    // Queue for sync
+    await addToSyncQueue('update', 'workout', workoutId, {
+      status: 'completed',
+      summary,
+      strengths,
+      improvements,
+      next_steps: nextSteps,
+      duration_minutes: durationMinutes,
+      updated_at: new Date().toISOString(),
+    })
+    console.log('✅ Workout completed offline with summary, queued for sync')
   } catch (error) {
-    console.error('Failed to complete workout with summary:', error)
+    console.error('Failed to complete workout offline:', error)
     throw error
   }
 }
@@ -527,23 +856,52 @@ export const deleteWorkout = async (workoutId: string): Promise<void> => {
     return
   }
   
-  try {
-    console.log('Deleting workout:', workoutId)
-    
-    // Delete the workout - this will cascade delete all workout_sets due to foreign key constraint
-    const { error } = await supabase
-      .from('workouts')
-      .delete()
-      .eq('id', workoutId)
+  if (!user) throw new Error('User not authenticated')
 
-    if (error) {
-      console.error('Error deleting workout:', error)
-      throw error
+  // Check if workout is stored offline
+  const isOfflineWorkout = workoutId.startsWith('local_')
+  
+  // Try online first if available and not an offline workout
+  if (isOnline() && isDatabaseConfigured && !isOfflineWorkout) {
+    try {
+      const { error } = await supabase
+        .from('workouts')
+        .delete()
+        .eq('id', workoutId)
+
+      if (error) throw error
+      
+      console.log('✅ Workout deleted successfully:', workoutId)
+      return
+    } catch (error) {
+      // If network error, fall through to offline storage
+      if (!isNetworkError(error) && isOnline()) {
+        throw error
+      }
+      console.log('💾 Deleting workout offline due to network issue:', error)
     }
+  }
+
+  // Offline mode: Delete from IndexedDB
+  const offlineWorkouts = await db.workouts
+    .where('workoutId')
+    .equals(workoutId)
+    .toArray()
+  
+  if (offlineWorkouts.length === 0) {
+    throw new Error('Workout not found in offline storage')
+  }
+
+  const offlineWorkout = offlineWorkouts[0]
+  
+  try {
+    await deleteWorkoutOffline(offlineWorkout.id!)
     
-    console.log('✅ Workout deleted successfully:', workoutId)
+    // Queue for sync
+    await addToSyncQueue('delete', 'workout', workoutId, {})
+    console.log('✅ Workout deleted offline, queued for sync')
   } catch (error) {
-    console.error('Failed to delete workout:', error)
+    console.error('Failed to delete workout offline:', error)
     throw error
   }
 }
@@ -559,20 +917,56 @@ export const getActiveWorkouts = async (): Promise<ActiveWorkout[]> => {
   }
   
   if (!user) throw new Error('User not authenticated')
-  if (!user) throw new Error('User not authenticated')
 
-  const { data: workouts, error } = await supabase
-    .from('workouts')
-    .select('*')
-    .eq('user_id', user.id)
-    .eq('status', 'in_progress')
-    .order('created_at', { ascending: false })
+  const allWorkouts: ActiveWorkout[] = []
 
-  if (error) throw error
+  // Get online workouts
+  if (isOnline() && isDatabaseConfigured) {
+    try {
+      const { data: workouts, error } = await supabase
+        .from('workouts')
+        .select('*')
+        .eq('user_id', user.id)
+        .eq('status', 'in_progress')
+        .order('created_at', { ascending: false })
 
-  // For now, return workouts without sets (you'll need to implement set fetching)
-  return workouts.map(workout => ({
-    ...workout,
-    sets: []
-  }))
+      if (!error && workouts) {
+        // Fetch sets for each workout
+        for (const workout of workouts) {
+          const { data: sets } = await supabase
+            .from('workout_sets')
+            .select('*')
+            .eq('workout_id', workout.id)
+            .order('order_index', { ascending: true })
+
+          allWorkouts.push({
+            ...workout,
+            sets: sets || []
+          })
+        }
+      }
+    } catch (error) {
+      console.warn('Error fetching online workouts:', error)
+    }
+  }
+
+  // Get offline workouts
+  try {
+    const offlineWorkouts = await getWorkoutsOffline(user.id)
+    const inProgressOffline = offlineWorkouts.filter(w => w.status === 'in_progress')
+    
+    for (const offline of inProgressOffline) {
+      const exercises = await getExercisesOffline(offline.id!)
+      const sets = exercises.map(ex => offlineExerciseToWorkoutSet(ex, offline.workoutId))
+      
+      allWorkouts.push(offlineWorkoutToActiveWorkout(offline, sets))
+    }
+  } catch (error) {
+    console.warn('Error fetching offline workouts:', error)
+  }
+
+  // Sort by created_at descending
+  return allWorkouts.sort((a, b) => 
+    new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  )
 }

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { ArrowLeft, Calendar, Target, Dumbbell, Save, MessageSquare, CheckCircle, Play, Loader2, Star, HelpCircle, X } from 'lucide-react'
-import { processWorkoutFeedback, UserProfile, generateFollowUpQuestions, AIResponse } from '@/lib/ai'
+import { processWorkoutFeedback, UserProfile, generateFollowUpQuestions } from '@/lib/ai'
 import { saveWorkoutPlan, SavedWorkoutPlan } from '@/lib/workoutPlans'
 import { useNavigate } from 'react-router-dom'
 
@@ -49,14 +49,11 @@ export const WorkoutPlanDetails = ({ plan, onBack, userProfile }: WorkoutPlanDet
     setQuestionsError(null)
 
     try {
-      const aiResponse: AIResponse = await generateFollowUpQuestions(userProfile)
+      const aiResponse = await generateFollowUpQuestions(userProfile)
       
       if (aiResponse.success) {
         setAiQuestions(aiResponse.data)
         setShowAIQuestions(true)
-        if (aiResponse.tokenUsage) {
-          console.log(`AI Questions Generated - Cost: $${aiResponse.tokenUsage.estimatedCost.toFixed(4)}`)
-        }
       } else {
         setQuestionsError(aiResponse.error || 'Failed to generate AI questions')
         // Fallback to basic questions
@@ -113,9 +110,6 @@ export const WorkoutPlanDetails = ({ plan, onBack, userProfile }: WorkoutPlanDet
         setAdjustedPlan(newPlan)
         setShowAIQuestions(false)
         setAiAnswers({})
-        if (aiResponse.tokenUsage) {
-          console.log(`Plan Adjusted via AI Questions - Cost: $${aiResponse.tokenUsage.estimatedCost.toFixed(4)}`)
-        }
       } else {
         setAiError(aiResponse.error || 'Failed to process questions with AI')
         const fallbackPlan = generateFallbackAdjustment(plan, feedbackText)
@@ -152,9 +146,6 @@ export const WorkoutPlanDetails = ({ plan, onBack, userProfile }: WorkoutPlanDet
         setAdjustedPlan(newPlan)
         setShowFeedback(false)
         setFeedback('')
-        if (aiResponse.tokenUsage) {
-          console.log(`Plan Adjusted via AI - Cost: $${aiResponse.tokenUsage.estimatedCost.toFixed(4)}`)
-        }
       } else {
         setAiError(aiResponse.error || 'Failed to process feedback with AI')
         const fallbackPlan = generateFallbackAdjustment(plan, feedback)
